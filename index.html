@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumma Stealer — C2 Network Traffic Dashboard</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <!-- Leaflet CSS + JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            900: '#0a0e1a',
+                            800: '#111827',
+                            700: '#1e293b',
+                            600: '#334155',
+                            500: '#475569',
+                            red: '#ef4444',
+                            orange: '#f97316',
+                            green: '#22c55e',
+                            blue: '#3b82f6',
+                            cyan: '#06b6d4',
+                            purple: '#a855f7',
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['"JetBrains Mono"', 'Fira Code', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: #0a0e1a;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        /* Leaflet overrides */
+        .leaflet-container { background: #0f172a !important; }
+        .leaflet-tile-pane { opacity: 0.85; }
+        .leaflet-control-zoom a { background: #1e293b !important; color: #94a3b8 !important; border-color: #334155 !important; }
+        .leaflet-control-attribution { background: rgba(15, 23, 42, 0.8) !important; color: #64748b !important; font-size: 10px !important; }
+        .leaflet-control-attribution a { color: #64748b !important; }
+
+        /* Pulse animation for C2 markers */
+        @keyframes pulse-ring {
+            0%   { transform: scale(0.8); opacity: 1; }
+            100% { transform: scale(2.5); opacity: 0; }
+        }
+        .marker-c2 {
+            background: radial-gradient(circle, #ef4444 30%, transparent 70%);
+            border-radius: 50%;
+            box-shadow: 0 0 12px 4px rgba(239, 68, 68, 0.5);
+        }
+        .marker-c2::after {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border: 2px solid #ef4444;
+            border-radius: 50%;
+            animation: pulse-ring 2s ease-out infinite;
+        }
+        .marker-suspect {
+            background: radial-gradient(circle, #f97316 30%, transparent 70%);
+            border-radius: 50%;
+            box-shadow: 0 0 10px 3px rgba(249, 115, 22, 0.4);
+        }
+        .marker-legit {
+            background: radial-gradient(circle, #3b82f6 30%, transparent 70%);
+            border-radius: 50%;
+            box-shadow: 0 0 8px 3px rgba(59, 130, 246, 0.3);
+        }
+
+        /* Glow effects */
+        .glow-red { box-shadow: 0 0 20px rgba(239, 68, 68, 0.15), inset 0 1px 0 rgba(239, 68, 68, 0.1); }
+        .glow-orange { box-shadow: 0 0 20px rgba(249, 115, 22, 0.15), inset 0 1px 0 rgba(249, 115, 22, 0.1); }
+        .glow-blue { box-shadow: 0 0 20px rgba(59, 130, 246, 0.15), inset 0 1px 0 rgba(59, 130, 246, 0.1); }
+        .glow-green { box-shadow: 0 0 20px rgba(34, 197, 94, 0.15), inset 0 1px 0 rgba(34, 197, 94, 0.1); }
+        .glow-cyan { box-shadow: 0 0 20px rgba(6, 182, 212, 0.15), inset 0 1px 0 rgba(6, 182, 212, 0.1); }
+
+        /* Scan line overlay */
+        .scanline::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(6, 182, 212, 0.015) 2px,
+                rgba(6, 182, 212, 0.015) 4px
+            );
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* Table row hover */
+        .threat-row:hover { background: rgba(6, 182, 212, 0.08) !important; }
+
+        /* Badge styles */
+        .badge-c2 { background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .badge-suspect { background: rgba(249, 115, 22, 0.15); color: #fdba74; border: 1px solid rgba(249, 115, 22, 0.3); }
+        .badge-decoy { background: rgba(168, 85, 247, 0.15); color: #c4b5fd; border: 1px solid rgba(168, 85, 247, 0.3); }
+        .badge-legit { background: rgba(34, 197, 94, 0.15); color: #86efac; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .badge-infra { background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3); }
+
+        /* Leaflet popup custom */
+        .leaflet-popup-content-wrapper {
+            background: #1e293b !important;
+            color: #e2e8f0 !important;
+            border: 1px solid #334155 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5) !important;
+        }
+        .leaflet-popup-tip { background: #1e293b !important; border: 1px solid #334155 !important; }
+        .popup-title { color: #06b6d4; font-weight: 700; font-size: 13px; }
+        .popup-label { color: #94a3b8; font-size: 11px; }
+        .popup-value { color: #e2e8f0; font-size: 12px; font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+
+<body class="scanline min-h-screen text-slate-300">
+
+    <!-- ═══════════════════ HEADER ═══════════════════ -->
+    <header class="border-b border-slate-800 bg-cyber-900/80 backdrop-blur-xl sticky top-0 z-50">
+        <div class="max-w-[1920px] mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <!-- Skull icon -->
+                <div class="w-10 h-10 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-lg sm:text-xl font-extrabold tracking-tight text-white">
+                        Lumma Stealer <span class="text-cyan-400">C2</span> Network Traffic Dashboard
+                    </h1>
+                    <p class="text-xs text-slate-500 font-mono">THREAT INTELLIGENCE &bull; PCAP ANALYSIS &bull; 2026-01-31</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-3 text-xs">
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-500/10 border border-red-500/30 text-red-400 font-semibold animate-pulse">
+                    <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                    THREAT ACTIVE
+                </span>
+                <span class="text-slate-500 font-mono hidden sm:inline">PCAP: lumma.pcap</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-[1920px] mx-auto px-4 sm:px-6 py-6 space-y-6">
+
+        <!-- ═══════════════════ KPI CARDS ═══════════════════ -->
+        <section class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <!-- Total IPs -->
+            <div class="rounded-xl border border-slate-700/60 bg-gradient-to-br from-slate-800/80 to-slate-900/80 p-5 glow-cyan">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total IPs Únicas</span>
+                    <div class="w-8 h-8 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582"/></svg>
+                    </div>
+                </div>
+                <p class="text-3xl font-extrabold text-white">58</p>
+                <p class="text-xs text-slate-500 mt-1">Direcciones IP públicas</p>
+            </div>
+
+            <!-- C2 Confirmed -->
+            <div class="rounded-xl border border-red-500/30 bg-gradient-to-br from-red-950/40 to-slate-900/80 p-5 glow-red">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-semibold text-red-400 uppercase tracking-wider">C2 Confirmados</span>
+                    <div class="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.25-8.25-3.286Z"/></svg>
+                    </div>
+                </div>
+                <p class="text-3xl font-extrabold text-red-400">3</p>
+                <p class="text-xs text-slate-500 mt-1">AVA HOST · Hostinger (×2)</p>
+            </div>
+
+            <!-- Countries -->
+            <div class="rounded-xl border border-slate-700/60 bg-gradient-to-br from-slate-800/80 to-slate-900/80 p-5 glow-blue">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Países Involucrados</span>
+                    <div class="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5"/></svg>
+                    </div>
+                </div>
+                <p class="text-3xl font-extrabold text-white">4</p>
+                <p class="text-xs text-slate-500 mt-1">US · LT · MD · UK</p>
+            </div>
+
+            <!-- Domains -->
+            <div class="rounded-xl border border-slate-700/60 bg-gradient-to-br from-slate-800/80 to-slate-900/80 p-5 glow-green">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Dominios Analizados</span>
+                    <div class="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center">
+                        <svg class="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/></svg>
+                    </div>
+                </div>
+                <p class="text-3xl font-extrabold text-white">71</p>
+                <p class="text-xs text-slate-500 mt-1">430 consultas DNS totales</p>
+            </div>
+        </section>
+
+        <!-- ═══════════════════ MAP ═══════════════════ -->
+        <section class="rounded-xl border border-slate-700/60 bg-slate-800/50 overflow-hidden">
+            <div class="px-5 py-3 border-b border-slate-700/60 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z"/></svg>
+                    <h2 class="font-bold text-white text-sm">Mapa de Geolocalización de Infraestructura</h2>
+                </div>
+                <div class="flex items-center gap-4 text-[11px]">
+                    <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-lg shadow-red-500/40"></span> C2 / Alto Riesgo</span>
+                    <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-orange-500 shadow-lg shadow-orange-500/40"></span> Sospechoso</span>
+                    <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-lg shadow-blue-500/40"></span> Legítimo / CDN</span>
+                </div>
+            </div>
+            <div id="map" class="w-full" style="height: 480px;"></div>
+        </section>
+
+        <!-- ═══════════════════ CHARTS ROW ═══════════════════ -->
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Bar Chart: Countries & Providers -->
+            <div class="lg:col-span-2 rounded-xl border border-slate-700/60 bg-slate-800/50 p-5">
+                <div class="flex items-center gap-2 mb-4">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"/></svg>
+                    <h2 class="font-bold text-white text-sm">Conexiones por Proveedor (ASN)</h2>
+                </div>
+                <div class="relative" style="height: 340px;">
+                    <canvas id="barChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Donut Chart: Traffic Breakdown -->
+            <div class="rounded-xl border border-slate-700/60 bg-slate-800/50 p-5">
+                <div class="flex items-center gap-2 mb-4">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6a7.5 7.5 0 1 0 7.5 7.5h-7.5V6Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5H21A7.5 7.5 0 0 0 13.5 3v7.5Z"/></svg>
+                    <h2 class="font-bold text-white text-sm">Clasificación del Tráfico</h2>
+                </div>
+                <div class="relative flex items-center justify-center" style="height: 340px;">
+                    <canvas id="donutChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════ ADDITIONAL CHARTS ROW ═══════════════════ -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Bar Chart: Countries -->
+            <div class="rounded-xl border border-slate-700/60 bg-slate-800/50 p-5">
+                <div class="flex items-center gap-2 mb-4">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 3v1.5M3 21v-6m0 0 2.77-.693a9 9 0 0 1 6.208.682l.108.054a9 9 0 0 0 6.086.71l3.114-.732a48.524 48.524 0 0 1-.005-10.499l-3.11.732a9 9 0 0 1-6.085-.711l-.108-.054a9 9 0 0 0-6.208-.682L3 4.5M3 15V4.5"/></svg>
+                    <h2 class="font-bold text-white text-sm">IPs por País</h2>
+                </div>
+                <div class="relative" style="height: 280px;">
+                    <canvas id="countryChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Horizontal bar: Top Domains by DNS Queries -->
+            <div class="rounded-xl border border-slate-700/60 bg-slate-800/50 p-5">
+                <div class="flex items-center gap-2 mb-4">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582"/></svg>
+                    <h2 class="font-bold text-white text-sm">Top 12 Dominios por Consultas DNS</h2>
+                </div>
+                <div class="relative" style="height: 280px;">
+                    <canvas id="dnsChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════ THREAT INTEL TABLE ═══════════════════ -->
+        <section class="rounded-xl border border-slate-700/60 bg-slate-800/50 overflow-hidden">
+            <div class="px-5 py-3 border-b border-slate-700/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z"/></svg>
+                    <h2 class="font-bold text-white text-sm">Tabla de Inteligencia de Amenazas</h2>
+                </div>
+                <div class="flex items-center gap-3 w-full sm:w-auto">
+                    <div class="relative flex-1 sm:flex-none">
+                        <svg class="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/></svg>
+                        <input id="tableSearch" type="text" placeholder="Buscar IP, dominio, país..."
+                               class="w-full sm:w-64 pl-9 pr-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-slate-300 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/30 transition"/>
+                    </div>
+                    <select id="tableFilter"
+                            class="px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-slate-300 focus:outline-none focus:border-cyan-500/50 cursor-pointer">
+                        <option value="all">Todos</option>
+                        <option value="C2">🔴 C2</option>
+                        <option value="Sospechoso">🟠 Sospechoso</option>
+                        <option value="Decoy">🟣 Decoy</option>
+                        <option value="Legítimo">🟢 Legítimo</option>
+                        <option value="Infraestructura">🔵 Infraestructura</option>
+                    </select>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-700/60">
+                            <th class="px-5 py-3">IP</th>
+                            <th class="px-5 py-3">País</th>
+                            <th class="px-5 py-3">Ciudad</th>
+                            <th class="px-5 py-3">Proveedor (ISP)</th>
+                            <th class="px-5 py-3">Dominio Asociado</th>
+                            <th class="px-5 py-3">Paquetes</th>
+                            <th class="px-5 py-3">Reputación</th>
+                        </tr>
+                    </thead>
+                    <tbody id="threatTableBody" class="divide-y divide-slate-700/40">
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ═══════════════════ C2 DOMAINS SECTION ═══════════════════ -->
+        <section class="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-950/20 to-slate-900/80 p-5">
+            <div class="flex items-center gap-2 mb-4">
+                <svg class="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>
+                <h2 class="font-bold text-white text-sm">Indicadores de Compromiso (IoCs) — Dominios C2 y Sospechosos</h2>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div class="rounded-lg bg-slate-900/80 border border-red-500/20 p-3">
+                    <span class="badge-c2 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">C2 Confirmado</span>
+                    <p class="font-mono text-sm text-red-300 mt-2">whitepepper.su</p>
+                    <p class="text-[11px] text-slate-500 mt-1">19 consultas DNS · Resolución a Hostinger LT</p>
+                </div>
+                <div class="rounded-lg bg-slate-900/80 border border-red-500/20 p-3">
+                    <span class="badge-c2 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">C2 Confirmado</span>
+                    <p class="font-mono text-sm text-red-300 mt-2">whooptm.cyou</p>
+                    <p class="text-[11px] text-slate-500 mt-1">3 consultas DNS · TLD .cyou sospechoso</p>
+                </div>
+                <div class="rounded-lg bg-slate-900/80 border border-red-500/20 p-3">
+                    <span class="badge-c2 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">C2 Confirmado</span>
+                    <p class="font-mono text-sm text-red-300 mt-2">80.97.160.24</p>
+                    <p class="text-[11px] text-slate-500 mt-1">79 paquetes · AVA HOST SRL · Moldavia</p>
+                </div>
+                <div class="rounded-lg bg-slate-900/80 border border-orange-500/20 p-3">
+                    <span class="badge-suspect text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Sospechoso</span>
+                    <p class="font-mono text-sm text-orange-300 mt-2">holiday-forever.cc</p>
+                    <p class="text-[11px] text-slate-500 mt-1">3 consultas DNS · TLD .cc no habitual</p>
+                </div>
+                <div class="rounded-lg bg-slate-900/80 border border-orange-500/20 p-3">
+                    <span class="badge-suspect text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Sospechoso</span>
+                    <p class="font-mono text-sm text-orange-300 mt-2">communicationfirewall-security.cc</p>
+                    <p class="text-[11px] text-slate-500 mt-1">3 consultas DNS · Ingeniería social en nombre</p>
+                </div>
+                <div class="rounded-lg bg-slate-900/80 border border-purple-500/20 p-3">
+                    <span class="badge-decoy text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Decoy / Payload</span>
+                    <p class="font-mono text-sm text-purple-300 mt-2">media.megafilehub4.lat</p>
+                    <p class="text-[11px] text-slate-500 mt-1">5 consultas · Entrega de payload</p>
+                </div>
+                <div class="rounded-lg bg-slate-900/80 border border-purple-500/20 p-3">
+                    <span class="badge-decoy text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Decoy / Payload</span>
+                    <p class="font-mono text-sm text-purple-300 mt-2">arch.filemegahab4.sbs</p>
+                    <p class="text-[11px] text-slate-500 mt-1">4 consultas · Descarga de archivos</p>
+                </div>
+                <div class="rounded-lg bg-slate-900/80 border border-purple-500/20 p-3">
+                    <span class="badge-decoy text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">Decoy / Señuelo</span>
+                    <p class="font-mono text-sm text-purple-300 mt-2">hiyter.com</p>
+                    <p class="text-[11px] text-slate-500 mt-1">4 consultas · Dominio señuelo</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════════════ FOOTER ═══════════════════ -->
+        <footer class="text-center text-xs text-slate-600 py-6 border-t border-slate-800">
+            <p>Lumma Stealer C2 Traffic Analysis Dashboard &bull; Hacking Ético — UT1 Práctica 1 &bull; Alejandro Erquicia Rodríguez</p>
+            <p class="mt-1">Generado a partir del análisis de <span class="font-mono text-slate-500">lumma.pcap</span> &bull; 51.127 paquetes &bull; 58 IPs públicas &bull; 71 dominios</p>
+        </footer>
+    </main>
+
+    <!-- ═══════════════════ JAVASCRIPT ═══════════════════ -->
+    <script>
+    // ── DATA ─────────────────────────────────────────────────────────────
+
+    const geoData = [
+        { ip: "80.97.160.24",    country: "Moldova",        region: "Municipiul Chisinau", city: "Chișinău",     isp: "AVA HOST SRL",                     lat: 47.0056, lng: 28.8575, packets: 79,   status: "C2",             domain: "whitepepper.su" },
+        { ip: "153.92.1.49",     country: "Lithuania",       region: "Vilnius County",      city: "Vilnius",      isp: "Hostinger International Limited",  lat: 54.6872, lng: 25.2797, packets: 1739, status: "C2",             domain: "whitepepper.su" },
+        { ip: "62.72.32.156",    country: "Lithuania",       region: "Vilnius County",      city: "Vilnius",      isp: "Hostinger International Limited",  lat: 54.6872, lng: 25.2797, packets: 24,   status: "C2",             domain: "whooptm.cyou" },
+        { ip: "104.21.46.67",    country: "United States",   region: "California",          city: "San Francisco",isp: "Cloudflare, Inc.",                 lat: 37.7749, lng:-122.4194,packets: 8252, status: "Sospechoso",     domain: "media.megafilehub4.lat / arch.filemegahab4.sbs" },
+        { ip: "104.21.48.156",   country: "United States",   region: "California",          city: "San Francisco",isp: "Cloudflare, Inc.",                 lat: 37.7749, lng:-122.4194,packets: 157,  status: "Sospechoso",     domain: "hiyter.com" },
+        { ip: "104.21.9.36",     country: "United States",   region: "California",          city: "San Francisco",isp: "Cloudflare, Inc.",                 lat: 37.7749, lng:-122.4194,packets: 105,  status: "Sospechoso",     domain: "holiday-forever.cc" },
+        { ip: "104.21.22.231",   country: "United States",   region: "California",          city: "San Francisco",isp: "Cloudflare, Inc.",                 lat: 37.7749, lng:-122.4194,packets: 12,   status: "Sospechoso",     domain: "communicationfirewall-security.cc" },
+        { ip: "104.16.79.73",    country: "United States",   region: "California",          city: "San Francisco",isp: "Cloudflare, Inc.",                 lat: 37.7749, lng:-122.4194,packets: 19,   status: "Legítimo",       domain: "cdnjs.cloudflare.com" },
+        { ip: "104.17.25.14",    country: "United States",   region: "California",          city: "San Francisco",isp: "Cloudflare, Inc.",                 lat: 37.7749, lng:-122.4194,packets: 115,  status: "Legítimo",       domain: "static.cloudflareinsights.com" },
+        { ip: "142.250.113.95",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 31,   status: "Legítimo",       domain: "*.google.com" },
+        { ip: "142.250.114.95",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 16,   status: "Legítimo",       domain: "*.google.com" },
+        { ip: "142.250.115.102", country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 53,   status: "Legítimo",       domain: "drive.google.com" },
+        { ip: "142.250.115.104", country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 25,   status: "Legítimo",       domain: "play.google.com" },
+        { ip: "142.250.115.113", country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 6,    status: "Legítimo",       domain: "*.googleapis.com" },
+        { ip: "142.250.115.138", country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 51,   status: "Legítimo",       domain: "youtube.googleapis.com" },
+        { ip: "142.250.115.188", country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 11,   status: "Legítimo",       domain: "clients6.google.com" },
+        { ip: "142.250.115.84",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 39,   status: "Legítimo",       domain: "www.gstatic.com" },
+        { ip: "142.250.115.99",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 17,   status: "Legítimo",       domain: "ssl.gstatic.com" },
+        { ip: "142.250.26.136",  country: "United States",   region: "Texas",               city: "Dallas",      isp: "Google LLC",                       lat: 32.7767, lng: -96.797, packets: 17,   status: "Legítimo",       domain: "safebrowsing.google.com" },
+        { ip: "142.250.26.95",   country: "United States",   region: "Texas",               city: "Dallas",      isp: "Google LLC",                       lat: 32.7767, lng: -96.797, packets: 46,   status: "Legítimo",       domain: "accounts.google.com" },
+        { ip: "142.251.116.94",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 50,   status: "Legítimo",       domain: "www.google.com" },
+        { ip: "142.251.116.95",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 240,  status: "Legítimo",       domain: "accounts.google.com" },
+        { ip: "142.251.186.100", country: "United States",   region: "Texas",               city: "Dallas",      isp: "Google LLC",                       lat: 32.7767, lng: -96.797, packets: 21,   status: "Legítimo",       domain: "update.googleapis.com" },
+        { ip: "142.251.186.95",  country: "United States",   region: "Texas",               city: "Dallas",      isp: "Google LLC",                       lat: 32.7767, lng: -96.797, packets: 57,   status: "Legítimo",       domain: "mtalk.google.com" },
+        { ip: "172.217.72.94",   country: "United States",   region: "Texas",               city: "Dallas",      isp: "Google LLC",                       lat: 32.7767, lng: -96.797, packets: 21,   status: "Legítimo",       domain: "www.google.com" },
+        { ip: "173.194.208.94",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 34,   status: "Legítimo",       domain: "*.googleapis.com" },
+        { ip: "173.194.208.95",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 46,   status: "Legítimo",       domain: "*.googleapis.com" },
+        { ip: "192.178.220.100", country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 20,   status: "Legítimo",       domain: "clients6.google.com" },
+        { ip: "192.178.220.102", country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 188,  status: "Legítimo",       domain: "clients6.google.com" },
+        { ip: "216.239.36.223",  country: "United States",   region: "California",          city: "San Jose",    isp: "Google LLC",                       lat: 37.3382, lng:-121.8863,packets: 29,   status: "Legítimo",       domain: "android.clients.google.com" },
+        { ip: "104.208.16.95",   country: "United States",   region: "Iowa",                city: "Des Moines",  isp: "Microsoft Corporation",            lat: 41.5868, lng: -93.625, packets: 40,   status: "Infraestructura",domain: "login.microsoftonline.com" },
+        { ip: "104.208.203.90",  country: "United States",   region: "Virginia",            city: "Chase City",  isp: "Microsoft Corporation",            lat: 36.7990, lng: -78.458, packets: 19,   status: "Infraestructura",domain: "licensing.mp.microsoft.com" },
+        { ip: "13.107.246.57",   country: "United States",   region: "Washington",          city: "Redmond",     isp: "Microsoft Corporation",            lat: 47.6740, lng:-122.1215,packets: 15,   status: "Infraestructura",domain: "edge.microsoft.com" },
+        { ip: "150.171.22.17",   country: "United States",   region: "Washington",          city: "Redmond",     isp: "Microsoft Corporation",            lat: 47.6740, lng:-122.1215,packets: 15,   status: "Infraestructura",domain: "www.msftconnecttest.com" },
+        { ip: "150.171.27.11",   country: "United States",   region: "Washington",          city: "Redmond",     isp: "Microsoft Corporation",            lat: 47.6740, lng:-122.1215,packets: 28,   status: "Infraestructura",domain: "edge.microsoft.com" },
+        { ip: "150.171.27.12",   country: "United States",   region: "Washington",          city: "Redmond",     isp: "Microsoft Corporation",            lat: 47.6740, lng:-122.1215,packets: 37,   status: "Infraestructura",domain: "edge.microsoft.com" },
+        { ip: "150.171.28.11",   country: "United States",   region: "Washington",          city: "Redmond",     isp: "Microsoft Corporation",            lat: 47.6740, lng:-122.1215,packets: 99,   status: "Infraestructura",domain: "edge.microsoft.com" },
+        { ip: "172.178.240.162", country: "United States",   region: "California",          city: "San Jose",    isp: "Microsoft Corporation",            lat: 37.3382, lng:-121.8863,packets: 18,   status: "Infraestructura",domain: "www.msn.com" },
+        { ip: "20.190.157.9",    country: "United States",   region: "Texas",               city: "San Antonio", isp: "Microsoft Corporation",            lat: 29.4241, lng: -98.494, packets: 15,   status: "Infraestructura",domain: "login.microsoftonline.com" },
+        { ip: "20.3.4.127",      country: "United States",   region: "Washington",          city: "Quincy",      isp: "Microsoft Corporation",            lat: 47.2343, lng:-119.8527,packets: 18,   status: "Infraestructura",domain: "watson.events.data.microsoft.com" },
+        { ip: "20.49.150.241",   country: "United Kingdom",  region: "England",             city: "London",      isp: "Microsoft Corporation",            lat: 51.5074, lng:  -0.1278,packets: 14,   status: "Infraestructura",domain: "settings-win.data.microsoft.com" },
+        { ip: "20.96.153.111",   country: "United States",   region: "Virginia",            city: "Chase City",  isp: "Microsoft Corporation",            lat: 36.7990, lng: -78.458, packets: 16,   status: "Infraestructura",domain: "odc.officeapps.live.com" },
+        { ip: "204.79.197.203",  country: "United States",   region: "Washington",          city: "Redmond",     isp: "Microsoft Corporation",            lat: 47.6740, lng:-122.1215,packets: 10,   status: "Infraestructura",domain: "www.bing.com" },
+        { ip: "40.126.29.11",    country: "United States",   region: "Texas",               city: "San Antonio", isp: "Microsoft Corporation",            lat: 29.4241, lng: -98.494, packets: 15,   status: "Infraestructura",domain: "login.microsoftonline.com" },
+        { ip: "40.126.29.8",     country: "United States",   region: "Texas",               city: "San Antonio", isp: "Microsoft Corporation",            lat: 29.4241, lng: -98.494, packets: 15,   status: "Infraestructura",domain: "login.microsoftonline.com" },
+        { ip: "52.109.0.142",    country: "United States",   region: "California",          city: "San Jose",    isp: "Microsoft Corporation",            lat: 37.3382, lng:-121.8863,packets: 59,   status: "Infraestructura",domain: "ecs.office.com" },
+        { ip: "52.123.128.14",   country: "United States",   region: "Washington",          city: "Redmond",     isp: "Microsoft Corporation",            lat: 47.6740, lng:-122.1215,packets: 9,    status: "Infraestructura",domain: "fd.api.iris.microsoft.com" },
+        { ip: "104.68.251.43",   country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai Technologies, Inc.",        lat: 32.7767, lng: -96.797, packets: 19,   status: "Legítimo",       domain: "edge-consumer-static.azureedge.net" },
+        { ip: "173.223.146.43",  country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai Technologies, Inc.",        lat: 32.7767, lng: -96.797, packets: 21,   status: "Legítimo",       domain: "www.bing.com" },
+        { ip: "184.29.31.84",    country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai Technologies, Inc.",        lat: 32.7767, lng: -96.797, packets: 24,   status: "Legítimo",       domain: "assets.adobedtm.com" },
+        { ip: "23.222.241.141",  country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 47,   status: "Legítimo",       domain: "assets.msn.com" },
+        { ip: "23.222.241.147",  country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 15,   status: "Legítimo",       domain: "img-s-msn-com.akamaized.net" },
+        { ip: "23.222.241.148",  country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 82,   status: "Legítimo",       domain: "assets.msn.com" },
+        { ip: "23.47.48.15",     country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 11,   status: "Legítimo",       domain: "api.msn.com" },
+        { ip: "23.47.48.26",     country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 37,   status: "Legítimo",       domain: "srtb.msn.com" },
+        { ip: "23.47.48.57",     country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 96,   status: "Legítimo",       domain: "www.msn.com" },
+        { ip: "23.55.178.217",   country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 14,   status: "Legítimo",       domain: "th.bing.com" },
+        { ip: "23.55.178.249",   country: "United States",   region: "Texas",               city: "Dallas",      isp: "Akamai International B.V.",        lat: 32.7767, lng: -96.797, packets: 5,    status: "Legítimo",       domain: "www.msftconnecttest.com" },
+    ];
+
+    // ── STATUS HELPERS ────────────────────────────────────────────────
+    function statusBadge(status) {
+        const map = {
+            "C2":             '<span class="badge-c2 text-[10px] font-bold px-2 py-0.5 rounded-full">C2</span>',
+            "Sospechoso":     '<span class="badge-suspect text-[10px] font-bold px-2 py-0.5 rounded-full">SOSPECHOSO</span>',
+            "Decoy":          '<span class="badge-decoy text-[10px] font-bold px-2 py-0.5 rounded-full">DECOY</span>',
+            "Legítimo":       '<span class="badge-legit text-[10px] font-bold px-2 py-0.5 rounded-full">LEGÍTIMO</span>',
+            "Infraestructura":'<span class="badge-infra text-[10px] font-bold px-2 py-0.5 rounded-full">INFRA</span>',
+        };
+        return map[status] || status;
+    }
+
+    function statusColor(status) {
+        return { "C2": "#ef4444", "Sospechoso": "#f97316", "Decoy": "#a855f7", "Legítimo": "#22c55e", "Infraestructura": "#3b82f6" }[status] || "#94a3b8";
+    }
+
+    function markerClass(status) {
+        return { "C2": "marker-c2", "Sospechoso": "marker-suspect" }[status] || "marker-legit";
+    }
+
+    function markerSize(status) {
+        return { "C2": 18, "Sospechoso": 14 }[status] || 10;
+    }
+
+    // ── LEAFLET MAP ──────────────────────────────────────────────────
+    const map = L.map('map', { zoomControl: true, scrollWheelZoom: true }).setView([35, -20], 3);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 16,
+        attribution: '&copy; Esri, HERE, Garmin, NGA, USGS'
+    }).addTo(map);
+
+    // Cluster close markers with slight offset
+    const usedCoords = {};
+    geoData.forEach(d => {
+        const key = `${d.lat},${d.lng}`;
+        if (usedCoords[key]) {
+            usedCoords[key]++;
+            d.lat += (Math.random() - 0.5) * 0.5 * usedCoords[key];
+            d.lng += (Math.random() - 0.5) * 0.5 * usedCoords[key];
+        } else {
+            usedCoords[key] = 1;
+        }
+
+        const size = markerSize(d.status);
+        const icon = L.divIcon({
+            className: markerClass(d.status),
+            iconSize: [size, size],
+            iconAnchor: [size/2, size/2]
+        });
+
+        const popup = `
+            <div style="min-width:220px">
+                <p class="popup-title">${d.ip}</p>
+                <hr style="border-color:#334155;margin:6px 0">
+                <p><span class="popup-label">País:</span> <span class="popup-value">${d.country}</span></p>
+                <p><span class="popup-label">Ciudad:</span> <span class="popup-value">${d.city}</span></p>
+                <p><span class="popup-label">ISP:</span> <span class="popup-value">${d.isp}</span></p>
+                <p><span class="popup-label">Dominio:</span> <span class="popup-value">${d.domain}</span></p>
+                <p><span class="popup-label">Paquetes:</span> <span class="popup-value">${d.packets.toLocaleString()}</span></p>
+                <p><span class="popup-label">Estado:</span> <span class="popup-value" style="color:${statusColor(d.status)};font-weight:700">${d.status.toUpperCase()}</span></p>
+            </div>
+        `;
+
+        L.marker([d.lat, d.lng], { icon }).addTo(map).bindPopup(popup);
+    });
+
+    // Draw lines from victim (10.1.21.58) approximate location to C2
+    const victimLatLng = [40.4168, -3.7038]; // Approx Spain
+    const c2Targets = geoData.filter(d => d.status === "C2");
+    c2Targets.forEach(d => {
+        L.polyline([victimLatLng, [d.lat, d.lng]], {
+            color: '#ef4444',
+            weight: 1.5,
+            opacity: 0.4,
+            dashArray: '6, 8'
+        }).addTo(map);
+    });
+
+    // ── CHART.JS — GLOBAL DEFAULTS ──────────────────────────────────
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.borderColor = 'rgba(51,65,85,0.5)';
+    Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+
+    // ── BAR CHART: PROVIDERS ─────────────────────────────────────────
+    (() => {
+        const providerMap = {};
+        geoData.forEach(d => {
+            const key = d.isp.replace(', Inc.','').replace(' Corporation','').replace(' International Limited','').replace(' International B.V.','').replace(' LLC','').replace(' SRL','');
+            providerMap[key] = (providerMap[key] || 0) + d.packets;
+        });
+        const sorted = Object.entries(providerMap).sort((a,b) => b[1]-a[1]);
+        const labels = sorted.map(s => s[0]);
+        const values = sorted.map(s => s[1]);
+
+        const providerColors = labels.map(l => {
+            if (l.includes('AVA HOST')) return '#ef4444';
+            if (l.includes('Hostinger')) return '#f97316';
+            if (l.includes('Cloudflare')) return '#a855f7';
+            if (l.includes('Google')) return '#22c55e';
+            if (l.includes('Microsoft')) return '#3b82f6';
+            if (l.includes('Akamai')) return '#06b6d4';
+            return '#64748b';
+        });
+
+        new Chart(document.getElementById('barChart'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Paquetes',
+                    data: values,
+                    backgroundColor: providerColors.map(c => c + '40'),
+                    borderColor: providerColors,
+                    borderWidth: 1.5,
+                    borderRadius: 6,
+                    maxBarThickness: 56
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        titleColor: '#e2e8f0',
+                        bodyColor: '#94a3b8',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        cornerRadius: 8,
+                        padding: 12,
+                        callbacks: {
+                            label: ctx => `  ${ctx.parsed.y.toLocaleString()} paquetes`
+                        }
+                    }
+                },
+                scales: {
+                    x: { ticks: { font: { size: 11 } }, grid: { display: false } },
+                    y: { ticks: { font: { size: 11 }, callback: v => v.toLocaleString() }, grid: { color: 'rgba(51,65,85,0.3)' } }
+                }
+            }
+        });
+    })();
+
+    // ── DONUT CHART: TRAFFIC CLASSIFICATION ──────────────────────────
+    (() => {
+        const cats = { "C2": 0, "Sospechoso": 0, "Decoy": 0, "Legítimo": 0, "Infraestructura": 0 };
+        // Decoy category for payload/decoy domains behind Cloudflare
+        geoData.forEach(d => {
+            if (d.status === "Sospechoso" && (d.domain.includes('megafile') || d.domain.includes('hiyter') || d.domain.includes('filemega'))) {
+                cats["Decoy"] += d.packets;
+            } else {
+                cats[d.status] += d.packets;
+            }
+        });
+
+        const labels = Object.keys(cats);
+        const values = Object.values(cats);
+        const colors = labels.map(l => statusColor(l));
+
+        new Chart(document.getElementById('donutChart'), {
+            type: 'doughnut',
+            data: {
+                labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: colors.map(c => c + '30'),
+                    borderColor: colors,
+                    borderWidth: 2,
+                    hoverOffset: 8
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '62%',
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: { padding: 16, usePointStyle: true, pointStyleWidth: 10, font: { size: 11 } }
+                    },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        titleColor: '#e2e8f0',
+                        bodyColor: '#94a3b8',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        cornerRadius: 8,
+                        padding: 12,
+                        callbacks: {
+                            label: ctx => {
+                                const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+                                const pct = ((ctx.parsed / total) * 100).toFixed(1);
+                                return `  ${ctx.label}: ${ctx.parsed.toLocaleString()} pkts (${pct}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    })();
+
+    // ── BAR CHART: COUNTRIES ─────────────────────────────────────────
+    (() => {
+        const countryMap = {};
+        geoData.forEach(d => {
+            countryMap[d.country] = (countryMap[d.country] || 0) + d.packets;
+        });
+        const sorted = Object.entries(countryMap).sort((a,b) => b[1]-a[1]);
+        const labels = sorted.map(s => s[0]);
+        const values = sorted.map(s => s[1]);
+
+        const countryColors = labels.map(l => {
+            if (l === 'Moldova') return '#ef4444';
+            if (l === 'Lithuania') return '#f97316';
+            if (l === 'United Kingdom') return '#3b82f6';
+            return '#06b6d4';
+        });
+
+        new Chart(document.getElementById('countryChart'), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Paquetes',
+                    data: values,
+                    backgroundColor: countryColors.map(c => c + '35'),
+                    borderColor: countryColors,
+                    borderWidth: 1.5,
+                    borderRadius: 6,
+                    maxBarThickness: 72
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        titleColor: '#e2e8f0',
+                        bodyColor: '#94a3b8',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        cornerRadius: 8,
+                        padding: 12,
+                        callbacks: { label: ctx => `  ${ctx.parsed.x.toLocaleString()} paquetes` }
+                    }
+                },
+                scales: {
+                    y: { ticks: { font: { size: 12 } }, grid: { display: false } },
+                    x: { ticks: { font: { size: 11 }, callback: v => v.toLocaleString() }, grid: { color: 'rgba(51,65,85,0.3)' } }
+                }
+            }
+        });
+    })();
+
+    // ── HORIZONTAL BAR CHART: TOP DNS DOMAINS ────────────────────────
+    (() => {
+        const dnsData = [
+            { domain: "edge.microsoft.com", count: 32, color: "#3b82f6" },
+            { domain: "wpad.win11office.com", count: 27, color: "#64748b" },
+            { domain: "wpad.mshome.net", count: 27, color: "#64748b" },
+            { domain: "whitepepper.su", count: 19, color: "#ef4444" },
+            { domain: "www.bing.com", count: 17, color: "#3b82f6" },
+            { domain: "optimizationguide-pa.googleapis.com", count: 9, color: "#22c55e" },
+            { domain: "accounts.google.com", count: 8, color: "#22c55e" },
+            { domain: "www.google.com", count: 8, color: "#22c55e" },
+            { domain: "oauthaccountmanager.googleapis.com", count: 8, color: "#22c55e" },
+            { domain: "odc.officeapps.live.com", count: 7, color: "#3b82f6" },
+            { domain: "media.megafilehub4.lat", count: 5, color: "#a855f7" },
+            { domain: "config.edge.skype.com", count: 5, color: "#3b82f6" },
+        ];
+
+        new Chart(document.getElementById('dnsChart'), {
+            type: 'bar',
+            data: {
+                labels: dnsData.map(d => d.domain),
+                datasets: [{
+                    label: 'Consultas DNS',
+                    data: dnsData.map(d => d.count),
+                    backgroundColor: dnsData.map(d => d.color + '35'),
+                    borderColor: dnsData.map(d => d.color),
+                    borderWidth: 1.5,
+                    borderRadius: 4,
+                    maxBarThickness: 20
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        titleColor: '#e2e8f0',
+                        bodyColor: '#94a3b8',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        cornerRadius: 8,
+                        padding: 12,
+                        callbacks: { label: ctx => `  ${ctx.parsed.x} consultas` }
+                    }
+                },
+                scales: {
+                    y: { ticks: { font: { size: 10, family: "'JetBrains Mono', monospace" } }, grid: { display: false } },
+                    x: { ticks: { font: { size: 11 }, stepSize: 5 }, grid: { color: 'rgba(51,65,85,0.3)' } }
+                }
+            }
+        });
+    })();
+
+    // ── THREAT INTELLIGENCE TABLE ────────────────────────────────────
+    const tbody = document.getElementById('threatTableBody');
+    const searchInput = document.getElementById('tableSearch');
+    const filterSelect = document.getElementById('tableFilter');
+
+    function renderTable() {
+        const query = searchInput.value.toLowerCase();
+        const filter = filterSelect.value;
+
+        const filtered = geoData.filter(d => {
+            if (filter !== 'all' && d.status !== filter) return false;
+            if (query) {
+                const haystack = `${d.ip} ${d.country} ${d.city} ${d.isp} ${d.domain} ${d.status}`.toLowerCase();
+                return haystack.includes(query);
+            }
+            return true;
+        });
+
+        tbody.innerHTML = filtered.map(d => `
+            <tr class="threat-row transition-colors">
+                <td class="px-5 py-2.5 font-mono text-xs text-cyan-300 whitespace-nowrap">${d.ip}</td>
+                <td class="px-5 py-2.5 text-xs whitespace-nowrap">${d.country}</td>
+                <td class="px-5 py-2.5 text-xs text-slate-400 whitespace-nowrap">${d.city}</td>
+                <td class="px-5 py-2.5 text-xs whitespace-nowrap" style="color:${d.status === 'C2' ? '#fca5a5' : d.status === 'Sospechoso' ? '#fdba74' : '#cbd5e1'}">${d.isp}</td>
+                <td class="px-5 py-2.5 font-mono text-[11px] text-slate-400 whitespace-nowrap max-w-[240px] truncate" title="${d.domain}">${d.domain}</td>
+                <td class="px-5 py-2.5 text-xs text-right font-mono">${d.packets.toLocaleString()}</td>
+                <td class="px-5 py-2.5">${statusBadge(d.status)}</td>
+            </tr>
+        `).join('');
+    }
+
+    searchInput.addEventListener('input', renderTable);
+    filterSelect.addEventListener('change', renderTable);
+    renderTable();
+
+    // ── RESIZE MAP FIX ───────────────────────────────────────────────
+    setTimeout(() => map.invalidateSize(), 300);
+    </script>
+</body>
+</html>
